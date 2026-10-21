@@ -1,0 +1,29 @@
+{
+  "name": "agent-wrangler-favicon-badges",
+  "version": "0.1.0",
+  "description": "Session activity and attention badges over the Agent Wrangler favicon.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "rlilker",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rlilker/agent-wrangler-favicon-badges.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "test:browser": "node --test test/browser.integration.js"
+  },
+  "wranglerExtension": {
+    "id": "favicon-badges",
+    "label": "Favicon badges",
+    "description": "Session activity and attention badges over the Agent Wrangler favicon.",
+    "author": "rlilker",
+    "requires": [],
+    "engines": {
+      "wranglerApi": "^1.40.0"
+    }
+  }
+}
