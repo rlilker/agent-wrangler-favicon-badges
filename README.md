@@ -16,6 +16,22 @@ Review the extension and choose **Install**. It appears as **Favicon badges** un
 Installed extensions and is enabled by default. Requires Agent Wrangler host API
 **1.40.0 or later within 1.x**; tested against host API **1.40.0**.
 
+### Why Wrangler shows a trust warning
+
+Agent Wrangler shows a general trust warning when installing extensions. It imports
+each extension's server entry point into its Node.js process without an enforced
+sandbox. `requires: []` means this extension requests no host capabilities; it does
+not restrict what its code could do.
+
+In the current implementation, the [server entry](index.js) only declares browser
+assets and settings, and the package has no npm dependencies. The browser code
+reads session status and settings through a receive-only board connection and
+updates the favicon. This describes the current source, not a security boundary
+or a guarantee that future versions cannot change.
+
+Install only if you trust the author, and review the source and changes before
+accepting updates.
+
 ## Badges
 
 The extension reads all board sessions, including nested sessions, regardless of the
