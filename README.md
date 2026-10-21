@@ -26,7 +26,7 @@ not restrict what its code could do.
 In the current implementation, the [server entry](index.js) only declares browser
 assets and settings, and the package has no npm dependencies. The browser code
 reads session status and settings through a receive-only board connection and
-updates the favicon and, optionally, the tab title. This describes the current
+updates the favicon and, optionally, the tab title and installed app badge. This describes the current
 source, not a security boundary
 or a guarantee that future versions cannot change.
 
@@ -64,13 +64,15 @@ Open **Settings → Extensions → Favicon badges**:
 - **Keep activity dots solid** stops activity dots flashing. Off by default.
 - **Show status in tab title** adds a steady status prefix, for example
   `🟢 Working — Agent Wrangler`. Off by default; available in any browser.
+- **Show attention count on app icon** requests a badge on an installed web app.
+  Off by default; see [Installed app-icon badges](#installed-app-icon-badges).
 - **Busy dot color**, **Needs input dot color**, **Completed tick color**, and
   **Failed cross color** accept six-digit hex colors such as `#22c55e`. Empty
   fields show the built-in color as a placeholder.
 
 Settings save immediately on the server and are shared across browsers. Browsers
-may slow flashing in background tabs. Pinned app icons and home-screen icons
-retain their original artwork.
+may slow flashing in background tabs. App-icon badging is a separate opt-in;
+favicon color and flashing controls do not customize the OS app badge.
 
 If favicon updates are unreliable in your browser, enable **Show status in tab
 title** manually. It uses the same status and priority as the badges, with
@@ -78,6 +80,56 @@ title** manually. It uses the same status and priority as the badges, with
 The title stays steady and works independently of SVG loading. Turning the setting
 off, disabling the extension, disconnecting, or having no active status restores
 the original title.
+
+## Installed app-icon badges
+
+Enable **Show attention count on app icon** to request an installed app badge
+through the browser's [Badging API](https://www.w3.org/TR/badging/). The count is
+the number of distinct sessions needing attention: reported failures (including
+dormant failures) or live sessions needing input. A session counts once even if
+both apply; nested sessions count individually. Busy or completed sessions alone
+clear the badge.
+
+1. Install Agent Wrangler as a web app using your browser's install control.
+   On supported Macs, Safari offers [File → Add to Dock](https://support.apple.com/en-ie/104996).
+2. Open the installed app, then use its in-page **Settings → Extensions →
+   Favicon badges** to enable the app-icon setting.
+3. In that installed app, read **App-icon badge permission**. If permission is
+   needed, click **Save** to deliberately request notification permission there.
+   Safari web-app permission is separate from permission in a browser tab.
+   Save is the permission action; the other controls already save immediately.
+
+This extension never prompts automatically and sends no notifications or push
+messages. If permission is denied, change it in the browser or app's settings.
+Permissions and API availability do not guarantee a visible badge. In particular,
+[Chrome 152 on macOS requires app notification permission](https://developer.chrome.com/release-notes/152).
+The browser can report permission granted and the badge request can succeed while
+macOS still hides it; check **System Settings → Notifications → your installed
+app → Badge app icon**. See [Chrome's macOS permission guidance](https://developer.chrome.com/blog/notification-attribution-macos).
+The extension does not send a test notification to trigger an OS prompt.
+
+| Platform | Expected installed-app behavior; native display not tested here |
+| --- | --- |
+| Windows | Supporting Chrome/Edge web apps can show an attention number on the taskbar icon. Installation and OS badge settings apply. [Browser support](https://developer.chrome.com/docs/capabilities/web-apis/badging-api). |
+| macOS | Supporting installed Chrome/Edge or Safari web apps can show an attention number in the Dock. Browser and app notification permission plus OS badge settings apply. |
+| ChromeOS | Supporting installed web apps show a [small circle on the shelf icon](https://chromeos.dev/en/posts/features-to-take-full-advantage-of-pwa-installation#badging), rather than necessarily showing the requested number. |
+| Linux | Native app-icon integration is outside this extension's scope; no OS bridge is provided. API exposure or a resolved promise does not establish visible Linux badging. Use the favicon or title indicator. |
+
+The OS chooses the badge's appearance: no custom colors, tick/cross shapes or
+flashing are requested for app icons. Unsupported or rejected APIs leave the
+favicon and title features working.
+
+An app badge is shared by the installed app's windows. A fresh default-off tab
+and closing a window do not clear another window's badge. Running opted-in pages
+refresh it from fresh graphs. No attention, turning the setting off, or disabling
+or uninstalling the extension clears it from connected pages. Disconnecting or
+closing retains the last known badge, which can persist after every window closes.
+There are no background updates while all pages are closed; open an enabled page
+to refresh stale state. The browser or OS may also clear a badge independently.
+
+Automated tests mock the Badging and notification-permission APIs and verify calls,
+counts, settings, a trusted permission click and cleanup. They do not verify native
+Dock, taskbar or shelf pixels, real permission prompts or OS settings.
 
 ## Browser compatibility
 
@@ -120,7 +172,7 @@ The board WebSocket protocol is currently unversioned. Compatibility is tested
 against host API 1.40.0, so a future protocol change may require an extension update
 even within the declared 1.x range.
 
-On a dropped connection the icon and title return to their original state while reconnecting
+On a dropped connection the favicon and title return to their original state while reconnecting
 with a bounded backoff. Before applying a graph, each connection verifies that the
 host still announces this extension. Disabling or uninstalling stops the connection
 and clears timers, so a delayed module import cannot revive a disabled badge.
@@ -147,7 +199,8 @@ Set `CHROME_BIN` if the browser is installed outside the usual locations. The te
 starts an isolated host with a temporary data directory, discovers this as an
 external extension, and checks native browser connections, badge image decoding,
 flashing, optional title status, settings persistence, updates from another socket,
-and disable/disconnect cleanup.
+and disable/disconnect cleanup. App-icon tests stub the native APIs; they do not
+prove native icon rendering or permission dialogs.
 A test-only transparent proxy supplies deterministic session graph fixtures; no host
 source is modified and no real agent sessions are launched.
 

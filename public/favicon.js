@@ -1,11 +1,16 @@
+// Shared failure predicate for favicon/title priority and app attention counts.
+export function sessionFailed(s) {
+  return s.status === 'failed'
+    || (s.status === 'needs-you' && (s.waitingReason === 'api-error' || s.waitingFor === 'container bring-up failed'))
+    || s.workflow?.phase?.label?.toLowerCase() === 'failed';
+}
+
 // Whole-board state, independent of filters, focus mode, or the selected view.
 // Idle means a completed turn, as on the board. Dormant sessions are set aside
 // for activity/completion, but a reported failure stays visible until resolved.
 export function aggregateStatus(sessions = []) {
   const active = sessions.filter((s) => s.managed || s.restarting);
-  if (sessions.some((s) => s.status === 'failed'
-    || (s.status === 'needs-you' && (s.waitingReason === 'api-error' || s.waitingFor === 'container bring-up failed'))
-    || s.workflow?.phase?.label?.toLowerCase() === 'failed')) return 'failed';
+  if (sessions.some(sessionFailed)) return 'failed';
   if (active.some((s) => s.status === 'needs-you')) return 'input';
   if (active.some((s) => s.restarting || s.status === 'working' || s.hasBackgroundShell)) return 'busy';
   if (active.length && active.every((s) => s.status === 'idle')) return 'complete';

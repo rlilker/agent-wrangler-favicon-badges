@@ -118,10 +118,28 @@ test('external extension loads on an unchanged host and reflects sessions, setti
     });
     const evaluate = async (expression) => (await call('Runtime.evaluate', { expression, returnByValue: true })).result?.value;
     await call('Runtime.enable');
+    await call('Page.enable');
+    await call('Page.addScriptToEvaluateOnNewDocument', { source: `
+      window.__badgeCalls = []; window.__badgeValue = null;
+      window.__permissionRequests = []; window.__hostNotifications = 0;
+      Object.defineProperties(navigator, {
+        setAppBadge: { configurable: true, value(count) { window.__badgeCalls.push(['set', count]); window.__badgeValue = count; return Promise.resolve(); } },
+        clearAppBadge: { configurable: true, value() { window.__badgeCalls.push(['clear']); window.__badgeValue = 0; return Promise.resolve(); } }
+      });
+      // The host has its own boot-time permission request. Start denied, then
+      // test extension user activation separately after the host has loaded.
+      window.Notification = class {
+        static permission = 'denied';
+        static requestPermission() { window.__permissionRequests.push(navigator.userActivation.isActive); this.permission = 'granted'; return Promise.resolve('granted'); }
+        constructor() { window.__hostNotifications++; }
+        close() {}
+      };
+    ` });
     await call('Page.navigate', { url });
     await until(() => bridges.size >= 2 && evaluate(`!!document.querySelector('.task-cell')`), 'native extension connection did not open alongside the board');
     const favicon = `document.querySelector('link[rel~="icon"]').getAttribute('href')`;
     assert.equal(await evaluate(favicon), 'favicon.svg');
+    assert.deepEqual(await evaluate('window.__badgeCalls'), [], 'default-off must not alter the installed app badge');
     const originalTitle = await evaluate('document.title');
     const setSessions = (sessions) => { fixture = sessions; const raw = JSON.stringify({ ...latest, graph: { ...latest.graph, sessions } }); for (const { down } of bridges) if (down.readyState === 1) down.send(raw); };
     const probe = { sessionId: 'favicon-probe', name: 'Favicon probe', agent: 'claude', managed: true, status: 'working', cwd: '/tmp' };
@@ -143,29 +161,53 @@ test('external extension loads on an unchanged host and reflects sessions, setti
     await until(() => saved()?.titleStatus === true, 'title opt-in did not persist');
     const titleIs = (prefix) => evaluate(`document.title === ${JSON.stringify(prefix ? `${prefix} — ` : '')} + ${JSON.stringify(originalTitle)}`);
     await until(() => titleIs('🟢 Working'), 'working title missing');
+    assert.match(await evaluate(`document.querySelector('[data-app-badge-permission]').textContent`), /off/i);
+    await evaluate(`Notification.permission = 'default'; document.querySelector('[data-ext="favicon-badges"][data-key="appBadge"] button').click();`);
+    await until(() => saved()?.appBadge === true, 'app badge opt-in did not persist');
+    await until(() => evaluate('window.__badgeValue === 0'), 'busy state must clear attention badge');
+    assert.deepEqual(await evaluate('window.__permissionRequests'), [], 'opt-in itself must not prompt');
+    const saveRect = await evaluate(`(() => { const save = document.querySelector('.ext-settings-save'); save.scrollIntoView({ block: 'center' }); const r = save.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+    await call('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, ...saveRect });
+    await call('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', clickCount: 1, ...saveRect });
+    await until(() => evaluate('window.__permissionRequests.length === 1'), 'settings Save did not request badge permission');
+    assert.deepEqual(await evaluate('window.__permissionRequests'), [true], 'permission request must run under direct user activation');
+    await until(() => evaluate(`document.querySelector('[data-app-badge-permission]').textContent.includes('granted')`), 'permission result missing from settings panel');
     // A different socket changing settings must also reach the browser.
     control.send(JSON.stringify({ type: 'ext-setting-set', id: 'favicon-badges', key: 'inputColor', value: '#abcdef' }));
     await until(() => latest.graph.extensions.find((e) => e.id === 'favicon-badges')?.settingValues.inputColor === '#abcdef', 'second-socket setting not broadcast');
     setSessions([{ ...probe, status: 'needs-you' }]);
     await until(() => evaluate(`decodeURIComponent(${favicon}).includes('#abcdef')`), 'input badge missing');
     await until(() => titleIs('🟠 Needs input'), 'input title missing');
+    await until(() => evaluate('window.__badgeValue === 1'), 'needs-input app attention count missing');
     setSessions([{ ...probe, status: 'idle' }]);
     await until(() => evaluate(`decodeURIComponent(${favicon}).includes('M13.5 17l2.3 2.5 4-5')`), 'completed tick missing');
     await until(() => titleIs('✅ Complete'), 'completed title missing');
+    await until(() => evaluate('window.__badgeValue === 0'), 'completed sessions must clear app badge');
     setSessions([{ ...probe, status: 'needs-you', waitingReason: 'api-error' }]);
     await until(() => evaluate(`decodeURIComponent(${favicon}).includes('#ef4444')`), 'failure cross missing');
     await until(() => titleIs('❌ Failed'), 'failure title missing');
+    await until(() => evaluate('window.__badgeValue === 1'), 'failure attention count missing');
+    setSessions([{ ...probe, status: 'failed' }, { ...probe, sessionId: 'nested-attention', parentSession: probe.sessionId, status: 'needs-you' }]);
+    await until(() => evaluate('window.__badgeValue === 2'), 'nested attention sessions must count individually');
+    setSessions([{ ...probe, status: 'needs-you', waitingReason: 'api-error' }]);
+    await until(() => evaluate('window.__badgeValue === 1'), 'shared app count did not refresh');
+    await evaluate(`document.querySelector('[data-ext="favicon-badges"][data-key="appBadge"] button').click();`);
+    await until(() => evaluate('window.__badgeValue === 0'), 'turning app badge off must clear it');
+    await evaluate(`document.querySelector('[data-ext="favicon-badges"][data-key="appBadge"] button').click();`);
+    await until(() => evaluate('window.__badgeValue === 1'), 're-enabling app badge must restore attention count');
     await evaluate(`document.querySelector('[data-ext="favicon-badges"][data-key="titleStatus"] button').click();`);
     await until(() => titleIs(''), 'turning title status off did not restore title');
     await evaluate(`document.querySelector('[data-ext="favicon-badges"][data-key="titleStatus"] button').click();`);
     await until(() => titleIs('❌ Failed'), 'turning title status back on did not update title');
     for (const { up } of [...bridges]) up.terminate();
     await until(() => titleIs(''), 'disconnect did not restore title');
+    assert.equal(await evaluate('window.__badgeValue'), 1, 'disconnect retains last known app-wide count');
     await until(() => titleIs('❌ Failed'), 'reconnect did not restore authorized title status');
     await until(() => bridges.size >= 2 && [...bridges].every(({ up }) => up.readyState === 1), 'board control did not reconnect before disabling');
     await evaluate(`document.querySelector('.ext-detail-head .setting-toggle').click();`);
     await until(async () => await evaluate(`${favicon} === 'favicon.svg'`) && bridges.size === 1, 'disable did not restore icon and close extension socket');
     assert.equal(await evaluate('document.title'), originalTitle, 'disable did not restore title');
+    await until(() => evaluate('window.__badgeValue === 0'), 'extension disable must clear its app badge');
     assert.deepEqual(errors, []);
   } finally {
     cdp?.close(); control?.close();

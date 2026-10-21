@@ -21,6 +21,9 @@ test('settings fit existing extension controls with validated hex color inputs',
   const title = manifest.settings.find((def) => def.key === 'titleStatus');
   assert.equal(title.type, 'toggle');
   assert.equal(title.default, undefined, 'title status remains opt-in');
+  const appBadge = manifest.settings.find((def) => def.key === 'appBadge');
+  assert.equal(appBadge.type, 'toggle');
+  assert.equal(appBadge.default, undefined, 'app-icon badging remains opt-in');
   for (const def of manifest.settings.filter((def) => def.type === 'text')) {
     const pattern = new RegExp(`^(?:${def.pattern})$`);
     assert.equal(pattern.test(def.placeholder), true);

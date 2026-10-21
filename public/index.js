@@ -1,4 +1,5 @@
 import { createFavicon } from './favicon.js';
+import { createAppBadge, permissionPanel } from './app-badge.js';
 
 const ID = 'favicon-badges';
 
@@ -7,10 +8,12 @@ const ID = 'favicon-badges';
 export function createClient({
   document = globalThis.document, window = globalThis.window,
   WebSocket = globalThis.WebSocket, fetch = globalThis.fetch,
+  navigator = globalThis.navigator, Notification = globalThis.Notification,
   setInterval = globalThis.setInterval, clearInterval = globalThis.clearInterval,
   setTimeout = globalThis.setTimeout, clearTimeout = globalThis.clearTimeout,
 } = {}) {
   const favicon = createFavicon({ document, fetch, setInterval, clearInterval });
+  const appBadge = createAppBadge({ navigator, Notification });
   let socket = null, retry = null, disposed = false, suspended = false, attempt = 0;
   const endpoint = new URL('/ws', window.location.href);
   endpoint.protocol = endpoint.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -25,13 +28,14 @@ export function createClient({
     }
   }
 
-  function dispose() {
+  function dispose({ clearBadge = false } = {}) {
     if (disposed) return;
     disposed = true;
     closeConnection();
     window.removeEventListener('pagehide', hide);
     window.removeEventListener('pageshow', show);
     favicon.dispose();
+    appBadge.dispose({ clear: clearBadge });
   }
 
   function hide(event) {
@@ -70,14 +74,17 @@ export function createClient({
       if (message.type === 'extensions') {
         // This arrives before a cached graph. A late module import after
         // disable/uninstall must stop here, even if that graph still says on.
-        if (!Array.isArray(message.list) || !message.list.some((entry) => entry?.id === ID)) { dispose(); return; }
+        if (!Array.isArray(message.list) || !message.list.some((entry) => entry?.id === ID)) { dispose({ clearBadge: true }); return; }
         announced = true;
       } else if (message.type === 'graph' && announced) {
         const graph = message.graph;
         const self = Array.isArray(graph?.extensions) ? graph.extensions.find((entry) => entry?.id === ID) : null;
-        if (!self?.enabled) { dispose(); return; }
+        if (!self?.enabled) { dispose({ clearBadge: true }); return; }
         attempt = 0;
-        favicon.update(Array.isArray(graph.sessions) ? graph.sessions : [], self.settingValues || {});
+        const sessions = Array.isArray(graph.sessions) ? graph.sessions : [];
+        const settings = self.settingValues || {};
+        favicon.update(sessions, settings);
+        appBadge.update(sessions, settings);
       }
     };
     current.onclose = () => {
@@ -91,13 +98,14 @@ export function createClient({
   window.addEventListener('pagehide', hide);
   window.addEventListener('pageshow', show);
   connect();
-  return { dispose };
+  return { dispose, subscribeBadge: appBadge.subscribe, requestBadgePermission: appBadge.requestPermission };
 }
 
 let current = null;
 export default {
-  register() {
+  register(slots) {
     current?.dispose();
     current = createClient();
+    slots.register('settings.panel', permissionPanel(() => current));
   },
 };

@@ -5,7 +5,7 @@ import { createClient } from '../public/index.js';
 const id = 'favicon-badges';
 const active = (status, extra = {}) => ({ managed: true, status, ...extra });
 const tick = () => new Promise((resolve) => setImmediate(resolve));
-function harness({ fetch, noIcon = false } = {}) {
+function harness({ fetch, noIcon = false, navigator, Notification } = {}) {
   let href = 'favicon.svg';
   let writes = 0;
   const icon = { getAttribute: () => href, setAttribute: (_key, value) => { href = value; writes++; } };
@@ -20,7 +20,7 @@ function harness({ fetch, noIcon = false } = {}) {
   const timers = new Map();
   let timerId = 0;
   const addTimer = (fn, delay) => { const key = ++timerId; timers.set(key, { fn, delay }); return key; };
-  const client = createClient({ document, window, WebSocket, fetch: fetch || (async () => ({ ok: true, text: async () => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="1"/></svg>' })), setInterval: addTimer, clearInterval: (key) => timers.delete(key), setTimeout: addTimer, clearTimeout: (key) => timers.delete(key) });
+  const client = createClient({ document, window, WebSocket, navigator, Notification, fetch: fetch || (async () => ({ ok: true, text: async () => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="1"/></svg>' })), setInterval: addTimer, clearInterval: (key) => timers.delete(key), setTimeout: addTimer, clearTimeout: (key) => timers.delete(key) });
   const message = (value, socket = sockets.at(-1)) => socket.onmessage?.({ data: JSON.stringify(value) });
   const announce = (list = [{ id }]) => message({ type: 'extensions', list });
   const graph = (sessions, settings = {}, extensions = [{ id, enabled: true, settingValues: settings }]) => message({ type: 'graph', graph: { sessions, extensions } });
@@ -260,4 +260,21 @@ test('title status leaves titles it does not own alone and captures the current 
   h.document.title = 'A newer external title';
   h.client.dispose();
   assert.equal(h.document.title, 'A newer external title', 'cleanup restores only a title it still owns');
+});
+
+
+test('rejected app-badge APIs cannot break title/favicon updates and explicit disable attempts badge cleanup', async () => {
+  const calls = [];
+  const h = harness({ navigator: {
+    setAppBadge(count) { calls.push(['set', count]); throw new Error('blocked'); },
+    clearAppBadge() { calls.push(['clear']); return Promise.reject(new Error('blocked')); },
+  } });
+  h.announce(); h.graph([active('needs-you')], { appBadge: true, titleStatus: true, steady: true });
+  await tick();
+  assert.match(svg(h), /#f59e0b/);
+  assert.equal(h.document.title, '🟠 Needs input — My Agent Wrangler');
+  h.announce([]); await tick();
+  assert.deepEqual(calls, [['set', 1], ['clear']]);
+  assert.equal(h.href(), 'favicon.svg');
+  assert.equal(h.document.title, 'My Agent Wrangler');
 });
