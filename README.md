@@ -69,6 +69,32 @@ Settings save immediately on the server and are shared across browsers. Browsers
 may slow flashing in background tabs. Only the browser tab favicon changes; pinned
 app icons and home-screen icons retain their original artwork.
 
+## Browser compatibility
+
+The runtime uses standard browser APIs and updates an SVG data-URL favicon; it
+has no Chrome-specific code. Expected desktop compatibility and completed tests
+are different:
+
+| Browser | Compatibility and verification |
+| --- | --- |
+| Chrome | Automated integration passes for page execution, SVG image decoding, flashing favicon-link updates, settings and disable cleanup. The test does not inspect pixels in the browser's native tab bar. |
+| Firefox | Expected to work, but this extension has not been verified in Firefox. Firefox has supported SVG favicons [since version 41](https://www.firefox.com/en-US/firefox/41.0/releasenotes/). |
+| Edge | Expected to work on [Chromium-based Edge](https://learn.microsoft.com/en-us/microsoft-edge/web-platform/site-impacting-changes), but this extension has not been tested in Edge. |
+| Safari | Safari 26 added [SVG and data-URL icon support](https://webkit.org/blog/17333/webkit-features-in-safari-26-0/#svg-icons). Live badge updates remain unverified; WebKit has an [open favicon-update report](https://bugs.webkit.org/show_bug.cgi?id=266426). Safari before 26 is incompatible with this SVG approach. |
+
+Safari 26's supported image formats do not establish that its tab icon will update
+while a page is open. Working Safari badges cannot currently be promised.
+
+To verify a browser release manually, record its version and operating system:
+
+1. Watch the actual tab icon change through working, needs input, completed and
+   failed states, checking the precedence when states coexist.
+2. Check that busy/input dots flash, **Keep activity dots solid** stops flashing,
+   and changing badge colors updates the displayed icon. Repeat in a background
+   tab, allowing for browser timer throttling.
+3. Disable the extension and disconnect the board in turn; confirm that the
+   original icon returns, then re-enable or reconnect and check updates resume.
+
 ## Connection and compatibility
 
 The current host client API does not expose a page-wide graph subscription. This
