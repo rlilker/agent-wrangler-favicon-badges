@@ -5,11 +5,11 @@ import { createClient } from '../public/index.js';
 const id = 'favicon-badges';
 const active = (status, extra = {}) => ({ managed: true, status, ...extra });
 const tick = () => new Promise((resolve) => setImmediate(resolve));
-function harness({ fetch } = {}) {
+function harness({ fetch, noIcon = false } = {}) {
   let href = 'favicon.svg';
   let writes = 0;
   const icon = { getAttribute: () => href, setAttribute: (_key, value) => { href = value; writes++; } };
-  const document = { baseURI: 'https://example.com/', querySelector: () => icon };
+  const document = { title: 'My Agent Wrangler', baseURI: 'https://example.com/', querySelector: () => noIcon ? null : icon };
   const handlers = new Map();
   const window = { location: new URL(document.baseURI), addEventListener: (name, fn) => handlers.set(name, fn), removeEventListener: (name) => handlers.delete(name) };
   const sockets = [];
@@ -24,7 +24,7 @@ function harness({ fetch } = {}) {
   const message = (value, socket = sockets.at(-1)) => socket.onmessage?.({ data: JSON.stringify(value) });
   const announce = (list = [{ id }]) => message({ type: 'extensions', list });
   const graph = (sessions, settings = {}, extensions = [{ id, enabled: true, settingValues: settings }]) => message({ type: 'graph', graph: { sessions, extensions } });
-  return { client, sockets, timers, handlers, message, announce, graph, href: () => href, writes: () => writes };
+  return { client, document, sockets, timers, handlers, message, announce, graph, href: () => href, writes: () => writes };
 }
 const svg = (h) => decodeURIComponent(h.href());
 
@@ -161,4 +161,103 @@ test('back-forward cache suspension restores the icon and starts a freshly autho
   assert.match(svg(h), /path/);
   h.client.dispose();
   assert.equal(h.handlers.size, 0);
+});
+
+
+test('title status is opt-in, steady, uses the original suffix and shares aggregate priority', async () => {
+  const h = harness();
+  h.announce();
+  h.graph([active('working')]);
+  assert.equal(h.document.title, 'My Agent Wrangler');
+  const enabled = { titleStatus: true };
+  const cases = [
+    [[active('working')], '🟢 Working'],
+    [[active('working'), active('needs-you')], '🟠 Needs input'],
+    [[active('idle')], '✅ Complete'],
+    [[active('needs-you'), active('failed', { managed: false })], '❌ Failed'],
+  ];
+  for (const [sessions, prefix] of cases) {
+    h.graph(sessions, enabled);
+    h.graph(sessions, enabled);
+    assert.equal(h.document.title, `${prefix} — My Agent Wrangler`);
+  }
+  h.graph([active('working')], enabled);
+  await tick();
+  [...h.timers.values()][0].fn();
+  assert.equal(h.document.title, '🟢 Working — My Agent Wrangler');
+  h.graph([active('working')], { titleStatus: false });
+  assert.equal(h.document.title, 'My Agent Wrangler');
+  h.graph([active('idle')], enabled);
+  h.graph([], enabled);
+  assert.equal(h.document.title, 'My Agent Wrangler');
+  h.graph([active('unknown')], enabled);
+  assert.equal(h.document.title, 'My Agent Wrangler');
+  h.client.dispose();
+});
+
+test('title status works without an icon or when the SVG fetch fails', async () => {
+  for (const options of [{ noIcon: true }, { fetch: async () => { throw new Error('offline'); } }]) {
+    const h = harness(options);
+    h.announce(); h.graph([active('needs-you')], { titleStatus: true });
+    assert.equal(h.document.title, '🟠 Needs input — My Agent Wrangler');
+    await tick();
+    assert.equal(h.document.title, '🟠 Needs input — My Agent Wrangler');
+    h.client.dispose();
+    assert.equal(h.document.title, 'My Agent Wrangler');
+  }
+});
+
+test('title restores on disconnect, disable, removal, disposal and page lifecycle cleanup', () => {
+  const stops = [
+    (h) => h.sockets[0].onclose(),
+    (h) => h.graph([], {}, [{ id, enabled: false }]),
+    (h) => h.announce([]),
+    (h) => h.client.dispose(),
+    (h) => h.handlers.get('pagehide')(),
+    (h) => h.handlers.get('pagehide')({ persisted: true }),
+  ];
+  for (const stop of stops) {
+    const h = harness();
+    h.announce(); h.graph([active('working')], { titleStatus: true });
+    assert.equal(h.document.title, '🟢 Working — My Agent Wrangler');
+    stop(h);
+    assert.equal(h.document.title, 'My Agent Wrangler');
+    h.client.dispose();
+  }
+});
+
+test('suspended title resumes only after a fresh enabled announcement and late SVG load cannot revive it', async () => {
+  let finish;
+  const h = harness({ fetch: () => new Promise((resolve) => { finish = resolve; }) });
+  h.announce(); h.graph([active('working')], { titleStatus: true });
+  assert.equal(h.document.title, '🟢 Working — My Agent Wrangler');
+  await tick();
+  h.handlers.get('pagehide')({ persisted: true });
+  assert.equal(h.document.title, 'My Agent Wrangler');
+  h.handlers.get('pageshow')({ persisted: true });
+  h.graph([active('idle')], { titleStatus: true });
+  assert.equal(h.document.title, 'My Agent Wrangler');
+  h.announce(); h.graph([active('idle')], { titleStatus: true });
+  assert.equal(h.document.title, '✅ Complete — My Agent Wrangler');
+  h.client.dispose();
+  finish({ ok: true, text: async () => '<svg></svg>' });
+  await tick();
+  assert.equal(h.document.title, 'My Agent Wrangler');
+});
+
+
+test('title status leaves titles it does not own alone and captures the current suffix on activation', () => {
+  const h = harness();
+  h.announce();
+  h.document.title = 'Another board title';
+  h.graph([active('working')]);
+  assert.equal(h.document.title, 'Another board title', 'default-off must not write the title');
+  h.graph([active('working')], { titleStatus: true });
+  assert.equal(h.document.title, '🟢 Working — Another board title');
+  h.graph([active('working')], { titleStatus: false });
+  assert.equal(h.document.title, 'Another board title');
+  h.graph([active('idle')], { titleStatus: true });
+  h.document.title = 'A newer external title';
+  h.client.dispose();
+  assert.equal(h.document.title, 'A newer external title', 'cleanup restores only a title it still owns');
 });

@@ -18,7 +18,10 @@ test('install-time declaration and runtime manifest agree, with no dependencies 
 test('settings fit existing extension controls with validated hex color inputs', () => {
   assert.equal(manifest.settings[0].key, 'steady');
   assert.equal(manifest.settings[0].type, 'toggle');
-  for (const def of manifest.settings.slice(1)) {
+  const title = manifest.settings.find((def) => def.key === 'titleStatus');
+  assert.equal(title.type, 'toggle');
+  assert.equal(title.default, undefined, 'title status remains opt-in');
+  for (const def of manifest.settings.filter((def) => def.type === 'text')) {
     const pattern = new RegExp(`^(?:${def.pattern})$`);
     assert.equal(pattern.test(def.placeholder), true);
     assert.equal(pattern.test('"><script/>'), false);

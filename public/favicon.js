@@ -12,6 +12,7 @@ export function aggregateStatus(sessions = []) {
   return null;
 }
 
+const TITLES = { busy: '🟢 Working', input: '🟠 Needs input', complete: '✅ Complete', failed: '❌ Failed' };
 const COLORS = { busy: '#22c55e', input: '#f59e0b', complete: '#22c55e', failed: '#ef4444' };
 const COLOR_KEYS = { busy: 'busyColor', input: 'inputColor', complete: 'completeColor', failed: 'failedColor' };
 const validColor = (color) => typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color);
@@ -31,14 +32,28 @@ function overlaySvg(base, status, color) {
 export function createFavicon({ document, fetch, setInterval, clearInterval }) {
   const icon = document.querySelector('link[rel~="icon"]');
   const original = icon?.getAttribute('href');
+  let titleSuffix = null, appliedTitle = null;
   const abort = new AbortController();
   let disposed = false, base = null, timer = null, signature = null;
   let sessions = [], settings = {};
   const write = (href) => { if (icon && icon.getAttribute('href') !== href) icon.setAttribute('href', href); };
   const clear = () => { if (timer !== null) { clearInterval(timer); timer = null; } };
+  const restoreTitle = () => {
+    if (appliedTitle !== null && document.title === appliedTitle) document.title = titleSuffix;
+    titleSuffix = appliedTitle = null;
+  };
   const render = () => {
-    if (disposed || !base) return;
+    if (disposed) return;
     const status = aggregateStatus(sessions);
+    // Title status is independent of the favicon asset and never flashes.
+    // Capture on activation and prefix that suffix, so graphs never stack labels.
+    if (settings.titleStatus === true && status) {
+      if (appliedTitle === null || document.title !== appliedTitle) titleSuffix = document.title;
+      const title = `${TITLES[status]} — ${titleSuffix}`;
+      if (document.title !== title) document.title = title;
+      appliedTitle = title;
+    } else restoreTitle();
+    if (!base) return;
     const color = validColor(settings[COLOR_KEYS[status]]) ? settings[COLOR_KEYS[status]] : COLORS[status];
     const flash = settings.steady !== true && (status === 'busy' || status === 'input');
     const next = `${status}:${color}:${flash}`;
@@ -64,7 +79,7 @@ export function createFavicon({ document, fetch, setInterval, clearInterval }) {
   }
   return {
     update(nextSessions, nextSettings) { sessions = nextSessions; settings = nextSettings; render(); },
-    reset() { sessions = []; settings = {}; signature = null; clear(); write(original); },
-    dispose() { disposed = true; abort.abort(); clear(); write(original); },
+    reset() { sessions = []; settings = {}; signature = null; clear(); write(original); restoreTitle(); },
+    dispose() { disposed = true; abort.abort(); clear(); write(original); restoreTitle(); },
   };
 }

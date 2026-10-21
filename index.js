@@ -16,6 +16,7 @@ export default {
   client: 'public/index.js',
   settings: [
     { key: 'steady', type: 'toggle', label: 'Keep activity dots solid', help: 'Stop the busy and needs-input dots flashing. By default they flash.' },
+    { key: 'titleStatus', type: 'toggle', label: 'Show status in tab title', help: 'Prefix the tab title with a steady status label, useful when a browser does not refresh its favicon. Off by default.' },
     ...[
       ['busyColor', 'Busy dot color', '#22c55e'],
       ['inputColor', 'Needs input dot color', '#f59e0b'],

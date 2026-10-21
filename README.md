@@ -26,7 +26,8 @@ not restrict what its code could do.
 In the current implementation, the [server entry](index.js) only declares browser
 assets and settings, and the package has no npm dependencies. The browser code
 reads session status and settings through a receive-only board connection and
-updates the favicon. This describes the current source, not a security boundary
+updates the favicon and, optionally, the tab title. This describes the current
+source, not a security boundary
 or a guarantee that future versions cannot change.
 
 Install only if you trust the author, and review the source and changes before
@@ -61,13 +62,22 @@ Open **Settings → Extensions → Favicon badges**:
 
 - **Enabled** switches badges off and restores the original favicon.
 - **Keep activity dots solid** stops activity dots flashing. Off by default.
+- **Show status in tab title** adds a steady status prefix, for example
+  `🟢 Working — Agent Wrangler`. Off by default; available in any browser.
 - **Busy dot color**, **Needs input dot color**, **Completed tick color**, and
   **Failed cross color** accept six-digit hex colors such as `#22c55e`. Empty
   fields show the built-in color as a placeholder.
 
 Settings save immediately on the server and are shared across browsers. Browsers
-may slow flashing in background tabs. Only the browser tab favicon changes; pinned
-app icons and home-screen icons retain their original artwork.
+may slow flashing in background tabs. Pinned app icons and home-screen icons
+retain their original artwork.
+
+If favicon updates are unreliable in your browser, enable **Show status in tab
+title** manually. It uses the same status and priority as the badges, with
+`🟢 Working`, `🟠 Needs input`, `✅ Complete` or `❌ Failed` before the existing title.
+The title stays steady and works independently of SVG loading. Turning the setting
+off, disabling the extension, disconnecting, or having no active status restores
+the original title.
 
 ## Browser compatibility
 
@@ -77,13 +87,15 @@ are different:
 
 | Browser | Compatibility and verification |
 | --- | --- |
-| Chrome | Automated integration passes for page execution, SVG image decoding, flashing favicon-link updates, settings and disable cleanup. The test does not inspect pixels in the browser's native tab bar. |
+| Chrome | Automated integration passes for page execution, SVG image decoding, flashing favicon-link updates, settings, title-status updates and cleanup. The test does not inspect pixels in the browser's native tab bar. |
 | Firefox | Expected to work, but this extension has not been verified in Firefox. Firefox has supported SVG favicons [since version 41](https://www.firefox.com/en-US/firefox/41.0/releasenotes/). |
 | Edge | Expected to work on [Chromium-based Edge](https://learn.microsoft.com/en-us/microsoft-edge/web-platform/site-impacting-changes), but this extension has not been tested in Edge. |
 | Safari | Safari 26 added [SVG and data-URL icon support](https://webkit.org/blog/17333/webkit-features-in-safari-26-0/#svg-icons). Live badge updates remain unverified; WebKit has an [open favicon-update report](https://bugs.webkit.org/show_bug.cgi?id=266426). Safari before 26 is incompatible with this SVG approach. |
 
 Safari 26's supported image formats do not establish that its tab icon will update
-while a page is open. Working Safari badges cannot currently be promised.
+while a page is open. Working Safari favicon badges cannot currently be promised.
+The optional **Show status in tab title** setting provides a separate text status
+without depending on live favicon updates; it is not automatically enabled for Safari.
 
 To verify a browser release manually, record its version and operating system:
 
@@ -92,8 +104,9 @@ To verify a browser release manually, record its version and operating system:
 2. Check that busy/input dots flash, **Keep activity dots solid** stops flashing,
    and changing badge colors updates the displayed icon. Repeat in a background
    tab, allowing for browser timer throttling.
-3. Disable the extension and disconnect the board in turn; confirm that the
-   original icon returns, then re-enable or reconnect and check updates resume.
+3. Enable **Show status in tab title** and check each steady status label. Turn
+   it off, disable the extension, and disconnect in turn; check the original title
+   and icon return as applicable, then re-enable or reconnect and check updates resume.
 
 ## Connection and compatibility
 
@@ -107,7 +120,7 @@ The board WebSocket protocol is currently unversioned. Compatibility is tested
 against host API 1.40.0, so a future protocol change may require an extension update
 even within the declared 1.x range.
 
-On a dropped connection the icon returns to its original state while reconnecting
+On a dropped connection the icon and title return to their original state while reconnecting
 with a bounded backoff. Before applying a graph, each connection verifies that the
 host still announces this extension. Disabling or uninstalling stops the connection
 and clears timers, so a delayed module import cannot revive a disabled badge.
@@ -133,7 +146,8 @@ AW_TEST_HOST_REPO=/path/to/agent-wrangler npm run test:browser
 Set `CHROME_BIN` if the browser is installed outside the usual locations. The test
 starts an isolated host with a temporary data directory, discovers this as an
 external extension, and checks native browser connections, badge image decoding,
-flashing, settings persistence, updates from another socket, and disable cleanup.
+flashing, optional title status, settings persistence, updates from another socket,
+and disable/disconnect cleanup.
 A test-only transparent proxy supplies deterministic session graph fixtures; no host
 source is modified and no real agent sessions are launched.
 

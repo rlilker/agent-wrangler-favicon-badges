@@ -122,6 +122,7 @@ test('external extension loads on an unchanged host and reflects sessions, setti
     await until(() => bridges.size >= 2 && evaluate(`!!document.querySelector('.task-cell')`), 'native extension connection did not open alongside the board');
     const favicon = `document.querySelector('link[rel~="icon"]').getAttribute('href')`;
     assert.equal(await evaluate(favicon), 'favicon.svg');
+    const originalTitle = await evaluate('document.title');
     const setSessions = (sessions) => { fixture = sessions; const raw = JSON.stringify({ ...latest, graph: { ...latest.graph, sessions } }); for (const { down } of bridges) if (down.readyState === 1) down.send(raw); };
     const probe = { sessionId: 'favicon-probe', name: 'Favicon probe', agent: 'claude', managed: true, status: 'working', cwd: '/tmp' };
     setSessions([probe]);
@@ -131,23 +132,40 @@ test('external extension loads on an unchanged host and reflects sessions, setti
     await evaluate(`window.__iconDecoded = false; const img = new Image(); img.onload = () => { window.__iconDecoded = true; }; img.src = ${JSON.stringify(generated)};`);
     await until(() => evaluate('window.__iconDecoded'), 'favicon SVG does not decode');
     await until(() => evaluate(`${favicon} === 'favicon.svg'`), 'busy badge does not flash');
+    assert.equal(await evaluate('document.title'), originalTitle, 'title status must be off by default');
     await evaluate(`document.getElementById('settings-btn').click(); document.querySelector('[data-tab="extensions"]').click(); document.querySelector('.ext-list-row[data-ext-id="favicon-badges"] .ext-list-item').click();`);
     await evaluate(`document.querySelector('[data-ext="favicon-badges"][data-key="steady"] button').click();`);
     await evaluate(`const color = document.querySelector('[data-ext="favicon-badges"][data-key="busyColor"] input'); color.value = '#123456'; color.dispatchEvent(new Event('change', { bubbles: true }));`);
     const saved = () => JSON.parse(readFileSync(join(data, 'config.json'), 'utf8')).extensionSettings?.['favicon-badges'];
     await until(() => saved()?.steady === true && saved()?.busyColor === '#123456', 'settings UI did not persist');
     await until(() => evaluate(`decodeURIComponent(${favicon}).includes('#123456')`), 'settings did not reach extension stream');
+    await evaluate(`document.querySelector('[data-ext="favicon-badges"][data-key="titleStatus"] button').click();`);
+    await until(() => saved()?.titleStatus === true, 'title opt-in did not persist');
+    const titleIs = (prefix) => evaluate(`document.title === ${JSON.stringify(prefix ? `${prefix} — ` : '')} + ${JSON.stringify(originalTitle)}`);
+    await until(() => titleIs('🟢 Working'), 'working title missing');
     // A different socket changing settings must also reach the browser.
     control.send(JSON.stringify({ type: 'ext-setting-set', id: 'favicon-badges', key: 'inputColor', value: '#abcdef' }));
     await until(() => latest.graph.extensions.find((e) => e.id === 'favicon-badges')?.settingValues.inputColor === '#abcdef', 'second-socket setting not broadcast');
     setSessions([{ ...probe, status: 'needs-you' }]);
     await until(() => evaluate(`decodeURIComponent(${favicon}).includes('#abcdef')`), 'input badge missing');
+    await until(() => titleIs('🟠 Needs input'), 'input title missing');
     setSessions([{ ...probe, status: 'idle' }]);
     await until(() => evaluate(`decodeURIComponent(${favicon}).includes('M13.5 17l2.3 2.5 4-5')`), 'completed tick missing');
+    await until(() => titleIs('✅ Complete'), 'completed title missing');
     setSessions([{ ...probe, status: 'needs-you', waitingReason: 'api-error' }]);
     await until(() => evaluate(`decodeURIComponent(${favicon}).includes('#ef4444')`), 'failure cross missing');
+    await until(() => titleIs('❌ Failed'), 'failure title missing');
+    await evaluate(`document.querySelector('[data-ext="favicon-badges"][data-key="titleStatus"] button').click();`);
+    await until(() => titleIs(''), 'turning title status off did not restore title');
+    await evaluate(`document.querySelector('[data-ext="favicon-badges"][data-key="titleStatus"] button').click();`);
+    await until(() => titleIs('❌ Failed'), 'turning title status back on did not update title');
+    for (const { up } of [...bridges]) up.terminate();
+    await until(() => titleIs(''), 'disconnect did not restore title');
+    await until(() => titleIs('❌ Failed'), 'reconnect did not restore authorized title status');
+    await until(() => bridges.size >= 2 && [...bridges].every(({ up }) => up.readyState === 1), 'board control did not reconnect before disabling');
     await evaluate(`document.querySelector('.ext-detail-head .setting-toggle').click();`);
     await until(async () => await evaluate(`${favicon} === 'favicon.svg'`) && bridges.size === 1, 'disable did not restore icon and close extension socket');
+    assert.equal(await evaluate('document.title'), originalTitle, 'disable did not restore title');
     assert.deepEqual(errors, []);
   } finally {
     cdp?.close(); control?.close();
