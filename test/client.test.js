@@ -5,11 +5,11 @@ import { createClient } from '../public/index.js';
 const id = 'favicon-badges';
 const active = (status, extra = {}) => ({ managed: true, status, ...extra });
 const tick = () => new Promise((resolve) => setImmediate(resolve));
-function harness({ fetch, noIcon = false, navigator, Notification, loadJobsAttention } = {}) {
+function harness({ fetch, noIcon = false, navigator, Notification, loadJobsAttention, baseURI = 'https://example.com/', moduleUrl } = {}) {
   let href = 'favicon.svg';
   let writes = 0;
   const icon = { getAttribute: () => href, setAttribute: (_key, value) => { href = value; writes++; } };
-  const document = { title: 'My Agent Wrangler', baseURI: 'https://example.com/', querySelector: () => noIcon ? null : icon };
+  const document = { title: 'My Agent Wrangler', baseURI, querySelector: () => noIcon ? null : icon };
   const handlers = new Map();
   const window = { location: new URL(document.baseURI), addEventListener: (name, fn) => handlers.set(name, fn), removeEventListener: (name) => handlers.delete(name) };
   const sockets = [];
@@ -20,7 +20,7 @@ function harness({ fetch, noIcon = false, navigator, Notification, loadJobsAtten
   const timers = new Map();
   let timerId = 0;
   const addTimer = (fn, delay) => { const key = ++timerId; timers.set(key, { fn, delay }); return key; };
-  const client = createClient({ document, window, WebSocket, navigator, Notification, loadJobsAttention, fetch: fetch || (async () => ({ ok: true, text: async () => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="1"/></svg>' })), setInterval: addTimer, clearInterval: (key) => timers.delete(key), setTimeout: addTimer, clearTimeout: (key) => timers.delete(key) });
+  const client = createClient({ document, window, WebSocket, navigator, Notification, loadJobsAttention, moduleUrl: moduleUrl || new URL('/ext/favicon-badges/index.js', baseURI).href, fetch: fetch || (async () => ({ ok: true, text: async () => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="1"/></svg>' })), setInterval: addTimer, clearInterval: (key) => timers.delete(key), setTimeout: addTimer, clearTimeout: (key) => timers.delete(key) });
   const message = (value, socket = sockets.at(-1)) => socket.onmessage?.({ data: JSON.stringify(value) });
   const announce = (list = [{ id }]) => message({ type: 'extensions', list });
   const graph = (sessions, settings = {}, extensions = [{ id, enabled: true, settingValues: settings }]) => message({ type: 'graph', graph: { sessions, extensions } });
@@ -360,4 +360,13 @@ test('incompatible full job shapes report incomplete coverage instead of silentl
   await tick(); let status; h.client.subscribeBadge((value) => { status = value; });
   assert.match(status.message, /incomplete/);
   h.client.dispose();
+});
+
+
+test('board connection follows the served module origin, custom port and deployment prefix', () => {
+  const h = harness({ baseURI: 'https://wrangler.example:8443/team/board/', moduleUrl: 'https://wrangler.example:8443/team/ext/favicon-badges/index.js?v=revision' });
+  assert.equal(h.sockets[0].url, 'wss://wrangler.example:8443/team/ws');
+  h.client.dispose();
+  const plain = harness({ baseURI: 'http://wrangler.example:8080/', moduleUrl: 'http://wrangler.example:8080/ext/favicon-badges/index.js' });
+  assert.equal(plain.sockets[0].url, 'ws://wrangler.example:8080/ws'); plain.client.dispose();
 });

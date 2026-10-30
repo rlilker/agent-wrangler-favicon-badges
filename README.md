@@ -95,10 +95,15 @@ the badge clears. The permission panel shows the session/job breakdown.
 
 Wrangler² support is optional: with its `jobs` extension enabled, the app badge
 uses that extension's own `jobNeedsYou(job)` rule from
-`/ext/jobs/public/job-state.js`. This includes plan and result reviews, failures,
+`/ext/jobs/job-state.js`. This includes plan and result reviews, failures,
 budget decisions and worker prompts according to the installed Wrangler² board.
 The integration covers full active jobs in the live graph, not finished-job
 history plates. Favicon and tab-title status continue to describe sessions.
+
+Both the optional import and board connection resolve relative to the served
+extension module, preserving the instance’s hostname, port and deployment prefix.
+No particular localhost address is required. This does not establish that the
+host application itself supports every reverse-proxy configuration.
 
 That module path and the job graph are not a versioned cross-extension API.
 Compatibility was checked with Wrangler² revision

@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, cpSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, cpSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { createServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -49,6 +49,16 @@ test('external extension loads on an unchanged host and reflects sessions, setti
       mkdirSync(dest, { recursive: true });
       for (const name of ['index.js', 'package.json', 'public', 'LICENSE']) cpSync(join(root, name), join(dest, name), { recursive: true });
     }
+    // Serve the optional peer through the unchanged host's real extension
+    // asset router, not a proxy that could accept an invalid runtime URL.
+    const jobsDir = join(data, 'extensions/jobs');
+    mkdirSync(join(jobsDir, 'public'), { recursive: true });
+    writeFileSync(join(jobsDir, 'package.json'), JSON.stringify({ name: 'test-jobs', version: '1.0.0', type: 'module' }));
+    writeFileSync(join(jobsDir, 'index.js'), `import { fileURLToPath } from 'node:url';
+      export default { id: 'jobs', label: 'Fixture Jobs', dir: fileURLToPath(new URL('.', import.meta.url)), defaultEnabled: true, requires: [], client: 'public/index.js' };`);
+    writeFileSync(join(jobsDir, 'public/index.js'), 'export default { register() {} };');
+    // test:jobs separately verifies decision fixtures against the real rule.
+    writeFileSync(join(jobsDir, 'public/job-state.js'), 'export const jobNeedsYou = (job) => job.fixtureNeedsYou === true;');
     const port = await freePort();
     const upstream = `http://127.0.0.1:${port}`;
     server = spawn(process.execPath, ['server/index.js'], { cwd: host, env: {
@@ -73,36 +83,37 @@ test('external extension loads on an unchanged host and reflects sessions, setti
     assert.equal(entry.external, true);
     assert.equal(entry.enabled, true);
     assert.equal(entry.quarantine, null);
+    assert.ok(original.graph.extensions.some((e) => e.id === 'jobs' && e.enabled), 'fixture Jobs must be activated by the real host');
+    assert.equal((await fetch(upstream + '/ext/jobs/job-state.js')).status, 200, 'host maps /ext/<id>/ into public/');
+    assert.equal((await fetch(upstream + '/ext/jobs/public/job-state.js')).status, 404, 'public/ must not appear twice in an asset URL');
 
     let fixture = [], jobFixture = null, latest = original;
     const transform = (raw) => {
       const frame = JSON.parse(raw);
-      if (frame.type === 'extensions') frame.list.push({ id: 'jobs' });
       if (frame.type === 'graph') {
         latest = frame; frame.graph.sessions = fixture;
-        frame.graph.extensions.push({ id: 'jobs', enabled: true });
         if (jobFixture) frame.graph.jobs = { jobs: jobFixture };
       }
       return JSON.stringify(frame);
     };
+    const prefix = '/team/';
+    const mountedPath = (url) => url.startsWith(prefix) ? '/' + url.slice(prefix.length) : url;
+    const prefixedRequests = new Set();
     proxy = createServer((req, res) => {
-      // A pure module fixture exercises the real optional import boundary;
-      // test:jobs separately validates fixtures against Wrangler²'s real rule.
-      if (req.url === '/ext/jobs/public/job-state.js') {
-        res.writeHead(200, { 'Content-Type': 'text/javascript' });
-        res.end('export const jobNeedsYou = (job) => job.fixtureNeedsYou === true;'); return;
-      }
-      const forward = request(upstream + req.url, { method: req.method, headers: req.headers }, (reply) => { res.writeHead(reply.statusCode, reply.headers); reply.pipe(res); });
+      if (req.url.startsWith(prefix)) prefixedRequests.add(req.url);
+      const forward = request(upstream + mountedPath(req.url), { method: req.method, headers: req.headers }, (reply) => { res.writeHead(reply.statusCode, reply.headers); reply.pipe(res); });
       forward.on('error', () => { res.statusCode = 502; res.end(); }); req.pipe(forward);
     });
     wss = new WebSocketServer({ noServer: true });
     proxy.on('upgrade', (req, socket, head) => wss.handleUpgrade(req, socket, head, (down) => {
-      const up = new Transport(`ws://127.0.0.1:${port}${req.url}`);
+      if (req.url.startsWith(prefix)) prefixedRequests.add(req.url);
+      const routedPath = mountedPath(req.url);
+      const up = new Transport(`ws://127.0.0.1:${port}${routedPath}`);
       const pair = { up, down }; bridges.add(pair);
       const pending = [];
       down.on('message', (raw) => { if (up.readyState === 1) up.send(raw.toString()); else pending.push(raw.toString()); });
       up.on('open', () => { for (const raw of pending) up.send(raw); });
-      up.on('message', (raw) => { if (down.readyState === 1) down.send(req.url === '/ws' ? transform(raw) : raw); });
+      up.on('message', (raw) => { if (down.readyState === 1) down.send(routedPath === '/ws' ? transform(raw) : raw); });
       down.on('close', () => { bridges.delete(pair); up.close(); });
       up.on('close', () => down.close()); up.on('error', () => down.close());
     }));
@@ -187,6 +198,13 @@ test('external extension loads on an unchanged host and reflects sessions, setti
     setSessions([{ ...probe, status: 'idle' }]);
     await until(() => evaluate('window.__badgeValue === 1'), 'idle worker job decision must set app badge');
     await until(() => evaluate(`document.querySelector('[data-app-badge-permission]').textContent.includes('1 Wrangler² job')`), 'job count breakdown missing');
+    // Independently mount the real extension module under a prefix. This
+    // verifies its default relative optional import and WebSocket endpoint;
+    // the host board itself still runs at its normal root URL.
+    await evaluate(`window.__prefixedClient = null; import('/team/ext/favicon-badges/index.js').then((module) => { window.__prefixedClient = module.createClient(); });`);
+    await until(() => evaluate('!!window.__prefixedClient'), 'prefixed client module did not load');
+    await until(() => prefixedRequests.has('/team/ws') && prefixedRequests.has('/team/ext/jobs/job-state.js'), 'prefixed client must use mounted WebSocket and Jobs routes');
+    await evaluate('window.__prefixedClient.dispose(); window.__prefixedClient = null;');
     jobFixture[0].runs = [{ sessionId: probe.sessionId }];
     setSessions([{ ...probe, status: 'needs-you' }]);
     await until(() => evaluate(`document.querySelector('[data-app-badge-permission]').textContent.includes('0 sessions and 1 Wrangler² job')`), 'job and linked native prompt should count once');

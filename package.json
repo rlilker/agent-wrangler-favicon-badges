@@ -1,6 +1,6 @@
 {
   "name": "agent-wrangler-favicon-badges",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Session activity and attention badges over the Agent Wrangler favicon.",
   "type": "module",
   "license": "Apache-2.0",

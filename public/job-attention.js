@@ -1,6 +1,6 @@
 // Optional integration with Wrangler²'s own board attention rule. Keep this
 // fixed URL relative to the host; no graph value can choose executable code.
-export const loadJobsAttention = () => import('/ext/jobs/public/job-state.js');
+export const loadJobsAttention = () => import('../jobs/job-state.js');
 
 export function createJobAttention({ load = loadJobsAttention, changed }) {
   let active = true, enabled = false, generation = 0, rule = null, loading = false, failed = false;

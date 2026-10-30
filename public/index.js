@@ -10,7 +10,7 @@ export function createClient({
   document = globalThis.document, window = globalThis.window,
   WebSocket = globalThis.WebSocket, fetch = globalThis.fetch,
   navigator = globalThis.navigator, Notification = globalThis.Notification,
-  loadJobsAttention = defaultJobsLoader,
+  loadJobsAttention = defaultJobsLoader, moduleUrl = import.meta.url,
   setInterval = globalThis.setInterval, clearInterval = globalThis.clearInterval,
   setTimeout = globalThis.setTimeout, clearTimeout = globalThis.clearTimeout,
 } = {}) {
@@ -30,7 +30,9 @@ export function createClient({
     const attention = jobAttention.update(sessions, graph.jobs, allowed);
     appBadge.update(attention.sessions, settings, attention);
   }
-  const endpoint = new URL('/ws', window.location.href);
+  // The host serves this module under <base>/ext/favicon-badges/.
+  // Resolve from that served URL to retain the origin, port and base path.
+  const endpoint = new URL('../../ws', moduleUrl);
   endpoint.protocol = endpoint.protocol === 'https:' ? 'wss:' : 'ws:';
 
   function closeConnection() {
