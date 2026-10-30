@@ -85,10 +85,27 @@ the original title.
 
 Enable **Show attention count on app icon** to request an installed app badge
 through the browser's [Badging API](https://www.w3.org/TR/badging/). The count is
-the number of distinct sessions needing attention: reported failures (including
-dormant failures) or live sessions needing input. A session counts once even if
-both apply; nested sessions count individually. Busy or completed sessions alone
-clear the badge.
+the number of distinct sessions needing attention plus active Wrangler² jobs
+waiting on a person. Sessions include reported failures (including dormant
+failures) or live sessions needing input. A session counts once even if both
+apply; nested sessions count individually. A job counts once regardless of how
+many decisions it needs. Sessions linked to a counted job do not add another
+count; unrelated controller prompts still count. When nothing needs attention,
+the badge clears. The permission panel shows the session/job breakdown.
+
+Wrangler² support is optional: with its `jobs` extension enabled, the app badge
+uses that extension's own `jobNeedsYou(job)` rule from
+`/ext/jobs/public/job-state.js`. This includes plan and result reviews, failures,
+budget decisions and worker prompts according to the installed Wrangler² board.
+The integration covers full active jobs in the live graph, not finished-job
+history plates. Favicon and tab-title status continue to describe sessions.
+
+That module path and the job graph are not a versioned cross-extension API.
+Compatibility was checked with Wrangler² revision
+`fdad122b1a62956ba9e787862a2e2143ea8073dc`. If the optional module cannot load or
+its rule fails, the permission panel explains that job coverage is unavailable
+or incomplete; session badges continue. Without Wrangler², no optional module
+is loaded. No additional capabilities or server changes are required.
 
 1. Install Agent Wrangler as a web app using your browser's install control.
    On supported Macs, Safari offers [File → Add to Dock](https://support.apple.com/en-ie/104996).
@@ -128,7 +145,7 @@ There are no background updates while all pages are closed; open an enabled page
 to refresh stale state. The browser or OS may also clear a badge independently.
 
 Automated tests mock the Badging and notification-permission APIs and verify calls,
-counts, settings, a trusted permission click and cleanup. They do not verify native
+counts, optional job-module loading, settings, a trusted permission click and cleanup. They do not verify native
 Dock, taskbar or shelf pixels, real permission prompts or OS settings.
 
 ## Browser compatibility
@@ -186,6 +203,13 @@ Node.js **22 or later** is required. There are no npm dependencies or build step
 
 ```sh
 npm test
+```
+
+To check compatibility with an existing Wrangler² checkout and its canonical
+attention rule:
+
+```sh
+AW_TEST_JOBS_REPO=/path/to/wrangler-squared npm run test:jobs
 ```
 
 The explicit browser integration test requires an existing, unmodified Agent

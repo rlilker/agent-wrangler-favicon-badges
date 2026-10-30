@@ -74,13 +74,24 @@ test('external extension loads on an unchanged host and reflects sessions, setti
     assert.equal(entry.enabled, true);
     assert.equal(entry.quarantine, null);
 
-    let fixture = [], latest = original;
+    let fixture = [], jobFixture = null, latest = original;
     const transform = (raw) => {
       const frame = JSON.parse(raw);
-      if (frame.type === 'graph') { latest = frame; frame.graph.sessions = fixture; }
+      if (frame.type === 'extensions') frame.list.push({ id: 'jobs' });
+      if (frame.type === 'graph') {
+        latest = frame; frame.graph.sessions = fixture;
+        frame.graph.extensions.push({ id: 'jobs', enabled: true });
+        if (jobFixture) frame.graph.jobs = { jobs: jobFixture };
+      }
       return JSON.stringify(frame);
     };
     proxy = createServer((req, res) => {
+      // A pure module fixture exercises the real optional import boundary;
+      // test:jobs separately validates fixtures against Wrangler²'s real rule.
+      if (req.url === '/ext/jobs/public/job-state.js') {
+        res.writeHead(200, { 'Content-Type': 'text/javascript' });
+        res.end('export const jobNeedsYou = (job) => job.fixtureNeedsYou === true;'); return;
+      }
       const forward = request(upstream + req.url, { method: req.method, headers: req.headers }, (reply) => { res.writeHead(reply.statusCode, reply.headers); reply.pipe(res); });
       forward.on('error', () => { res.statusCode = 502; res.end(); }); req.pipe(forward);
     });
@@ -141,7 +152,7 @@ test('external extension loads on an unchanged host and reflects sessions, setti
     assert.equal(await evaluate(favicon), 'favicon.svg');
     assert.deepEqual(await evaluate('window.__badgeCalls'), [], 'default-off must not alter the installed app badge');
     const originalTitle = await evaluate('document.title');
-    const setSessions = (sessions) => { fixture = sessions; const raw = JSON.stringify({ ...latest, graph: { ...latest.graph, sessions } }); for (const { down } of bridges) if (down.readyState === 1) down.send(raw); };
+    const setSessions = (sessions) => { fixture = sessions; const raw = JSON.stringify({ ...latest, graph: { ...latest.graph, sessions, jobs: jobFixture ? { jobs: jobFixture } : undefined } }); for (const { down } of bridges) if (down.readyState === 1) down.send(raw); };
     const probe = { sessionId: 'favicon-probe', name: 'Favicon probe', agent: 'claude', managed: true, status: 'working', cwd: '/tmp' };
     setSessions([probe]);
     await until(() => evaluate(`${favicon}.startsWith('data:image/svg+xml,')`), 'busy badge missing');
@@ -172,6 +183,17 @@ test('external extension loads on an unchanged host and reflects sessions, setti
     await until(() => evaluate('window.__permissionRequests.length === 1'), 'settings Save did not request badge permission');
     assert.deepEqual(await evaluate('window.__permissionRequests'), [true], 'permission request must run under direct user activation');
     await until(() => evaluate(`document.querySelector('[data-app-badge-permission]').textContent.includes('granted')`), 'permission result missing from settings panel');
+    jobFixture = [{ id: 'decision', stage: 'active', fixtureNeedsYou: true, runs: [], subJobs: [] }, { id: 'history', stage: 'done', plate: 'opaque' }];
+    setSessions([{ ...probe, status: 'idle' }]);
+    await until(() => evaluate('window.__badgeValue === 1'), 'idle worker job decision must set app badge');
+    await until(() => evaluate(`document.querySelector('[data-app-badge-permission]').textContent.includes('1 Wrangler² job')`), 'job count breakdown missing');
+    jobFixture[0].runs = [{ sessionId: probe.sessionId }];
+    setSessions([{ ...probe, status: 'needs-you' }]);
+    await until(() => evaluate(`document.querySelector('[data-app-badge-permission]').textContent.includes('0 sessions and 1 Wrangler² job')`), 'job and linked native prompt should count once');
+    jobFixture[0].fixtureNeedsYou = false;
+    setSessions([{ ...probe, status: 'idle' }]);
+    await until(() => evaluate('window.__badgeValue === 0'), 'resolved job decision must clear badge');
+    jobFixture = null;
     // A different socket changing settings must also reach the browser.
     control.send(JSON.stringify({ type: 'ext-setting-set', id: 'favicon-badges', key: 'inputColor', value: '#abcdef' }));
     await until(() => latest.graph.extensions.find((e) => e.id === 'favicon-badges')?.settingValues.inputColor === '#abcdef', 'second-socket setting not broadcast');

@@ -5,7 +5,7 @@ import { createClient } from '../public/index.js';
 const id = 'favicon-badges';
 const active = (status, extra = {}) => ({ managed: true, status, ...extra });
 const tick = () => new Promise((resolve) => setImmediate(resolve));
-function harness({ fetch, noIcon = false, navigator, Notification } = {}) {
+function harness({ fetch, noIcon = false, navigator, Notification, loadJobsAttention } = {}) {
   let href = 'favicon.svg';
   let writes = 0;
   const icon = { getAttribute: () => href, setAttribute: (_key, value) => { href = value; writes++; } };
@@ -20,7 +20,7 @@ function harness({ fetch, noIcon = false, navigator, Notification } = {}) {
   const timers = new Map();
   let timerId = 0;
   const addTimer = (fn, delay) => { const key = ++timerId; timers.set(key, { fn, delay }); return key; };
-  const client = createClient({ document, window, WebSocket, navigator, Notification, fetch: fetch || (async () => ({ ok: true, text: async () => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="1"/></svg>' })), setInterval: addTimer, clearInterval: (key) => timers.delete(key), setTimeout: addTimer, clearTimeout: (key) => timers.delete(key) });
+  const client = createClient({ document, window, WebSocket, navigator, Notification, loadJobsAttention, fetch: fetch || (async () => ({ ok: true, text: async () => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="1"/></svg>' })), setInterval: addTimer, clearInterval: (key) => timers.delete(key), setTimeout: addTimer, clearTimeout: (key) => timers.delete(key) });
   const message = (value, socket = sockets.at(-1)) => socket.onmessage?.({ data: JSON.stringify(value) });
   const announce = (list = [{ id }]) => message({ type: 'extensions', list });
   const graph = (sessions, settings = {}, extensions = [{ id, enabled: true, settingValues: settings }]) => message({ type: 'graph', graph: { sessions, extensions } });
@@ -277,4 +277,87 @@ test('rejected app-badge APIs cannot break title/favicon updates and explicit di
   assert.deepEqual(calls, [['set', 1], ['clear']]);
   assert.equal(h.href(), 'favicon.svg');
   assert.equal(h.document.title, 'My Agent Wrangler');
+});
+
+
+test('opted-in badges include canonical active job decisions once and explain the breakdown', async () => {
+  const calls = []; let loads = 0;
+  const h = harness({ navigator: { setAppBadge(n) { calls.push(n); }, clearAppBadge() { calls.push(0); } }, loadJobsAttention: async () => { loads++; return { jobNeedsYou: (job) => !!job.error || job.subJobs.some((s) => s.stage === 'review') }; } });
+  h.announce([{ id }, { id: 'jobs' }]);
+  const extensions = [{ id, enabled: true, settingValues: { appBadge: true } }, { id: 'jobs', enabled: true }];
+  const graph = (jobs, sessions = []) => h.message({ type: 'graph', graph: { extensions, sessions, jobs: { jobs } } });
+  graph([{ id: 'job1', stage: 'active', subJobs: [{ stage: 'review' }], runs: [{ sessionId: 'linked' }] }, { id: 'done', stage: 'done', plate: 'opaque' }], [active('needs-you', { sessionId: 'linked', offBoard: 'jobs' }), active('needs-you', { sessionId: 'controller', offBoard: 'jobs' })]);
+  await tick();
+  assert.equal(loads, 1);
+  assert.equal(calls.at(-1), 2, 'one job plus unmatched controller, without double-counting linked session');
+  let status; const unsubscribe = h.client.subscribeBadge((s) => { status = s; });
+  assert.equal(status.jobCount, 1); assert.equal(status.sessionCount, 1);
+  assert.match(status.message, /1 session.*1.*job/i);
+  graph([{ id: 'job1', stage: 'active', subJobs: [{ stage: 'implementation' }], runs: [] }]); await tick();
+  assert.equal(calls.at(-1), 0, 'job decision resolved clears attention');
+  unsubscribe(); h.client.dispose();
+});
+
+test('Jobs integration is lazy and failures leave native session badges with partial coverage explained', async () => {
+  let loads = 0; const calls = [];
+  const h = harness({ navigator: { setAppBadge(n) { calls.push(n); }, clearAppBadge() { calls.push(0); } }, loadJobsAttention: async () => { loads++; throw new Error('missing'); } });
+  h.announce([{ id }, { id: 'jobs' }]);
+  const frame = (enabled) => h.message({ type: 'graph', graph: { extensions: [{ id, enabled: true, settingValues: { appBadge: enabled } }, { id: 'jobs', enabled: true }], sessions: [active('needs-you')], jobs: { jobs: [{ id: 'job1', stage: 'active', runs: [], subJobs: [] }] } } });
+  frame(false); await tick(); assert.equal(loads, 0);
+  frame(true); await tick(); assert.equal(loads, 1); assert.equal(calls.at(-1), 1);
+  let status; h.client.subscribeBadge((s) => { status = s; }); assert.match(status.message, /Wrangler².*unavailable.*session/i);
+  frame(true); await tick(); assert.equal(loads, 1, 'unchanged errors do not reload each graph');
+  h.client.dispose();
+});
+
+test('late Jobs imports use the latest authorized graph and cannot revive disabled or disposed badges', async () => {
+  let finish; const calls = [];
+  const h = harness({ navigator: { setAppBadge(n) { calls.push(n); }, clearAppBadge() { calls.push(0); } }, loadJobsAttention: () => new Promise((resolve) => { finish = resolve; }) });
+  h.announce([{ id }, { id: 'jobs' }]);
+  const frame = (jobEnabled, jobs) => h.message({ type: 'graph', graph: { extensions: [{ id, enabled: true, settingValues: { appBadge: true } }, { id: 'jobs', enabled: jobEnabled }], sessions: [], jobs: { jobs } } });
+  frame(true, [{ id: 'one', stage: 'active', error: true, runs: [], subJobs: [] }]);
+  frame(false, []);
+  finish({ jobNeedsYou: () => true }); await tick();
+  assert.equal(calls.at(-1), 0); assert.equal(calls.includes(1), false);
+  h.client.dispose();
+});
+
+
+test('pending Jobs rules apply only the latest graph and remain inert after disposal or disconnect', async () => {
+  for (const action of ['latest', 'dispose', 'disconnect', 'off']) {
+    let finish; const calls = [];
+    const h = harness({ navigator: { setAppBadge(n) { calls.push(n); }, clearAppBadge() { calls.push(0); } }, loadJobsAttention: () => new Promise((resolve) => { finish = resolve; }) });
+    h.announce([{ id }, { id: 'jobs' }]);
+    const frame = (error, on = true) => h.message({ type: 'graph', graph: { extensions: [{ id, enabled: true, settingValues: { appBadge: on } }, { id: 'jobs', enabled: true }], sessions: [], jobs: { jobs: [{ id: 'job1', stage: 'active', error, runs: [], subJobs: [] }] } } });
+    frame(true);
+    if (action === 'latest') frame(false);
+    if (action === 'dispose') h.client.dispose();
+    if (action === 'disconnect') h.sockets[0].onclose();
+    if (action === 'off') frame(true, false);
+    finish({ jobNeedsYou: (job) => job.error }); await tick();
+    assert.equal(calls.includes(1), false, action);
+    h.client.dispose();
+  }
+});
+
+test('Jobs must be announced and enabled; invalid exports and predicate errors report partial coverage', async () => {
+  for (const module of [{}, { jobNeedsYou() { throw new Error('incompatible shape'); } }]) {
+    let loads = 0;
+    const h = harness({ navigator: { setAppBadge() {}, clearAppBadge() {} }, loadJobsAttention: async () => { loads++; return module; } });
+    const graph = { sessions: [], extensions: [{ id, enabled: true, settingValues: { appBadge: true } }, { id: 'jobs', enabled: true }], jobs: { jobs: [{ id: 'one', stage: 'active', runs: [], subJobs: [] }] } };
+    h.announce(); h.message({ type: 'graph', graph }); await tick(); assert.equal(loads, 0);
+    h.announce([{ id }, { id: 'jobs' }]); h.message({ type: 'graph', graph }); await tick(); assert.equal(loads, 1);
+    let status; h.client.subscribeBadge((s) => { status = s; }); assert.match(status.message, /unavailable or incomplete/);
+    h.client.dispose();
+  }
+});
+
+
+test('incompatible full job shapes report incomplete coverage instead of silently claiming no job attention', async () => {
+  const h = harness({ navigator: { setAppBadge() {}, clearAppBadge() {} }, loadJobsAttention: async () => ({ jobNeedsYou: () => true }) });
+  h.announce([{ id }, { id: 'jobs' }]);
+  h.message({ type: 'graph', graph: { sessions: [], extensions: [{ id, enabled: true, settingValues: { appBadge: true } }, { id: 'jobs', enabled: true }], jobs: { jobs: [{ id: 'incompatible', stage: 'active' }] } } });
+  await tick(); let status; h.client.subscribeBadge((value) => { status = value; });
+  assert.match(status.message, /incomplete/);
+  h.client.dispose();
 });

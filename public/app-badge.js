@@ -12,7 +12,7 @@ export function createAppBadge({ navigator, Notification }) {
   const supported = typeof navigator?.setAppBadge === 'function' && typeof navigator?.clearAppBadge === 'function';
   let enabled = false, active = true, count = 0, generation = 0;
   let desired, attempted, running = false, refreshPending = false, error = '', permissionError = '', permissionResult = null;
-  let permissionPending = null;
+  let permissionPending = null, sessionCount = 0, jobCount = 0, diagnostic = '';
   const listeners = new Set();
   const permission = () => typeof Notification?.permission === 'string' ? Notification.permission : (permissionResult || 'unavailable');
   function status() {
@@ -25,7 +25,9 @@ export function createAppBadge({ navigator, Notification }) {
     else if (permission() === 'denied') message = 'Notification permission is denied. Change it in browser or app settings if you want badges.';
     else if (typeof Notification?.requestPermission !== 'function') message = 'This browser cannot request notification permission here. App installation and OS settings still control badge visibility.';
     else message = 'If your browser requires notification permission for app badges, click Save below to request it.';
-    return { supported, enabled, permission: permission(), message };
+    if (enabled) message += ` ${sessionCount} session${sessionCount === 1 ? '' : 's'} and ${jobCount} Wrangler² job${jobCount === 1 ? '' : 's'} need attention.`;
+    if (enabled && diagnostic) message += ` ${diagnostic}`;
+    return { supported, enabled, permission: permission(), sessionCount, jobCount, message };
   }
   function notify() { for (const listener of listeners) { try { listener(status()); } catch { /* A settings panel must not break other indicators. */ } } }
   async function pump() {
@@ -53,11 +55,13 @@ export function createAppBadge({ navigator, Notification }) {
     pump();
   }
   return {
-    update(sessions, settings) {
+    update(sessions, settings, attention = {}) {
       if (!active) return;
       const wasEnabled = enabled;
       enabled = settings.appBadge === true;
-      count = attentionCount(sessions);
+      sessionCount = attentionCount(sessions);
+      jobCount = attention.jobCount || 0; diagnostic = attention.diagnostic || '';
+      count = sessionCount + jobCount;
       if (wasEnabled !== enabled) { generation++; permissionError = ''; }
       // Refresh successful state on fresh graphs: another tab may have changed
       // the shared app badge. Do not hammer a rejected unchanged API request.
